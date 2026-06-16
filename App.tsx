@@ -6,8 +6,10 @@ import {
   TouchableOpacity, 
   FlatList, 
   PermissionsAndroid, 
-  ActivityIndicator 
+  ActivityIndicator,
+  Platform
 } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import { scanWifi } from 'react-native-simple-wifi-scanner';
 
 export default function App() {
@@ -19,25 +21,42 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      // 1. Demande de la permission de localisation à l'utilisateur (obligatoire sur Android)
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        {
-          title: "Autorisation Wi-Fi",
-          message: "Cette application a besoin d'accéder à la localisation pour scanner les réseaux Wi-Fi.",
-          buttonNegative: "Refuser",
-          buttonPositive: "Autoriser",
-        }
-      );
+      // 1. Vérifier si le Wi-Fi est activé
+      const state = await NetInfo.fetch();
+      if (!state.isWifiEnabled && Platform.OS === 'android') {
+        setError("Le Wi-Fi est désactivé. Veuillez l'activer pour scanner les réseaux.");
+        setLoading(false);
+        return;
+      }
 
-      if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-        // 2. Si l'utilisateur accepte, on lance ton module natif !
-        const data = await scanWifi();
-        setNetworks(data);
-      } else {
-        setError("Permission de localisation refusée.");
+      if (Platform.OS === 'android') {
+        // 2. Demande des permissions de localisation (nécessaire pour scanner le Wi-Fi)
+        const granted = await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+        ]);
+
+        const isGranted = 
+          granted['android.permission.ACCESS_FINE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED &&
+          granted['android.permission.ACCESS_COARSE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED;
+
+        if (!isGranted) {
+          setError("Permission de localisation refusée. Elle est nécessaire pour scanner les réseaux Wi-Fi.");
+          setLoading(false);
+          return;
+        }
+      }
+
+      // 3. Lancement du scan
+      const data = await scanWifi();
+      console.log('Wifi data:', data);
+      setNetworks(data || []);
+      
+      if (data && data.length === 0) {
+        setError("Aucun réseau trouvé. Vérifiez que le Wi-Fi et la Localisation (GPS) sont activés sur votre appareil.");
       }
     } catch (err: any) {
+      console.error(err);
       setError(err.message || "Une erreur est survenue lors du scan.");
     } finally {
       setLoading(false);
@@ -66,7 +85,7 @@ export default function App() {
       {/* LISTE DES RÉSULTATS */}
       <FlatList
         data={networks}
-        keyExtractor={(item, index) => item.BSSID + index}
+        keyExtractor={(item, index) => (item.BSSID || "") + index}
         contentContainerStyle={styles.listContainer}
         renderItem={({ item }) => (
           <View style={styles.card}>
