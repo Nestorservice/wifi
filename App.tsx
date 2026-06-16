@@ -1,128 +1,320 @@
-import React, { useState } from 'react';
-import { 
-  StyleSheet, 
-  Text, 
-  View, 
-  TouchableOpacity, 
-  FlatList, 
-  PermissionsAndroid, 
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  StyleSheet,
+  Text,
+  View,
+  TouchableOpacity,
+  FlatList,
+  PermissionsAndroid,
   ActivityIndicator,
-  Platform
+  Platform,
+  StatusBar,
+  Animated,
+  Dimensions,
+  SafeAreaView
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
-import { scanWifi } from 'react-native-simple-wifi-scanner';
+import WifiManager from 'react-native-wifi-reborn';
+
+const { width } = Dimensions.get('window');
+
+const NetworkCard = ({ item, index }) => {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 500,
+      delay: index * 100,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
+  const getSignalColor = (level) => {
+    if (level > -50) return '#48BB78'; // Excellent
+    if (level > -70) return '#ECC94B'; // Good
+    return '#F56565'; // Weak
+  };
+
+  return (
+    <Animated.View style={[styles.card, { opacity: fadeAnim }]}>
+      <View style={styles.cardHeader}>
+        <View style={[styles.signalDot, { backgroundColor: getSignalColor(item.level) }]} />
+        <Text style={styles.ssidText} numberOfLines={1}>{item.SSID || "Hidden Network"}</Text>
+      </View>
+      <View style={styles.cardBody}>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>BSSID</Text>
+          <Text style={styles.infoValue}>{item.BSSID}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Signal Strength</Text>
+          <Text style={styles.infoValue}>{item.level} dBm</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Frequency</Text>
+          <Text style={styles.infoValue}>{item.frequency} MHz</Text>
+        </View>
+      </View>
+    </Animated.View>
+  );
+};
 
 export default function App() {
-  const [networks, setNetworks] = useState<any[]>([]);
+  const [networks, setNetworks] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState(null);
+  const scanAnim = useRef(new Animated.Value(0)).current;
+
+  const startScanAnimation = () => {
+    scanAnim.setValue(0);
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(scanAnim, {
+          toValue: 1,
+          duration: 1500,
+          useNativeDriver: true,
+        }),
+        Animated.timing(scanAnim, {
+          toValue: 0,
+          duration: 1500,
+          useNativeDriver: true,
+        })
+      ])
+    ).start();
+  };
+
+  const stopScanAnimation = () => {
+    scanAnim.stopAnimation();
+  };
 
   const startWifiScan = async () => {
     setLoading(true);
     setError(null);
+    startScanAnimation();
+
     try {
-      // 1. Vérifier si le Wi-Fi est activé
       const state = await NetInfo.fetch();
       if (!state.isWifiEnabled && Platform.OS === 'android') {
-        setError("Le Wi-Fi est désactivé. Veuillez l'activer pour scanner les réseaux.");
-        setLoading(false);
-        return;
+        throw new Error("Wi-Fi is disabled. Please turn it on.");
       }
 
       if (Platform.OS === 'android') {
-        // 2. Demande des permissions de localisation (nécessaire pour scanner le Wi-Fi)
         const granted = await PermissionsAndroid.requestMultiple([
           PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
           PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
         ]);
 
-        const isGranted = 
+        const isGranted =
           granted['android.permission.ACCESS_FINE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED &&
           granted['android.permission.ACCESS_COARSE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED;
 
         if (!isGranted) {
-          setError("Permission de localisation refusée. Elle est nécessaire pour scanner les réseaux Wi-Fi.");
-          setLoading(false);
-          return;
+          throw new Error("Location permission denied. It is required to scan Wi-Fi.");
         }
       }
 
-      // 3. Lancement du scan
-      const data = await scanWifi();
-      console.log('Wifi data:', data);
+      const data = await WifiManager.reScanAndLoadWifiList();
       setNetworks(data || []);
       
       if (data && data.length === 0) {
-        setError("Aucun réseau trouvé. Vérifiez que le Wi-Fi et la Localisation (GPS) sont activés sur votre appareil.");
+        setError("No networks found. Try again or check your hardware.");
       }
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || "Une erreur est survenue lors du scan.");
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
+      stopScanAnimation();
     }
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Mon Scanner Wi-Fi 🚀</Text>
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#1A202C" />
       
-      {/* LE GROS BOUTON */}
-      <TouchableOpacity 
-        style={[styles.button, loading && styles.buttonDisabled]} 
-        onPress={startWifiScan}
-        disabled={loading}
-      >
-        {loading ? (
-          <ActivityIndicator color="#FFF" />
-        ) : (
-          <Text style={styles.buttonText}>SCANNER LE WI-FI</Text>
-        )}
-      </TouchableOpacity>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Wi-Fi Inspector</Text>
+        <Text style={styles.headerSubtitle}>Scan nearby networks instantly</Text>
+      </View>
 
-      {error && <Text style={styles.errorText}>{error}</Text>}
+      <View style={styles.scanContainer}>
+        <Animated.View 
+          style={[
+            styles.scanCircle, 
+            { 
+              transform: [{ scale: scanAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.2] }) }],
+              opacity: scanAnim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.1] })
+            }
+          ]} 
+        />
+        <TouchableOpacity 
+          style={styles.scanButton} 
+          onPress={startWifiScan}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator size="large" color="#FFF" />
+          ) : (
+            <Text style={styles.scanButtonText}>START SCAN</Text>
+          )}
+        </TouchableOpacity>
+      </View>
 
-      {/* LISTE DES RÉSULTATS */}
+      {error && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      )}
+
       <FlatList
         data={networks}
         keyExtractor={(item, index) => (item.BSSID || "") + index}
         contentContainerStyle={styles.listContainer}
-        renderItem={({ item }) => (
-          <View style={styles.card}>
-            <Text style={styles.networkName}>{item.SSID || "Réseau masqué"}</Text>
-            <Text style={styles.networkDetails}>BSSID : {item.BSSID}</Text>
-            <Text style={styles.networkDetails}>Signal : {item.level} dBm</Text>
-          </View>
-        )}
+        showsVerticalScrollIndicator={false}
+        renderItem={({ item, index }) => <NetworkCard item={item} index={index} />}
         ListEmptyComponent={
-          !loading ? <Text style={styles.emptyText}>Aucun réseau détecté. Cliquez sur le bouton.</Text> : null
+          !loading ? (
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyTitle}>Ready to search?</Text>
+              <Text style={styles.emptySubtitle}>Tap the button above to discover available Wi-Fi networks in your area.</Text>
+            </View>
+          ) : null
         }
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F7FA', alignItems: 'center', paddingTop: 50 },
-  title: { fontSize: 24, fontWeight: 'bold', color: '#1A202C', marginBottom: 20 },
-  button: { 
-    backgroundColor: '#3182CE', 
-    paddingVertical: 15, 
-    paddingHorizontal: 40, 
-    borderRadius: 30, 
-    elevation: 3, 
-    shadowColor: '#000', 
-    shadowOffset: { width: 0, height: 2 }, 
-    shadowOpacity: 0.25, 
-    shadowRadius: 3.84,
-    marginBottom: 20
+  container: {
+    flex: 1,
+    backgroundColor: '#1A202C', // Deep Dark Blue
   },
-  buttonDisabled: { backgroundColor: '#A0AEC0' },
-  buttonText: { color: '#FFF', fontSize: 18, fontWeight: 'bold', letterSpacing: 1 },
-  errorText: { color: '#E53E3E', marginHorizontal: 20, marginBottom: 10, textAlign: 'center' },
-  listContainer: { width: '100%', paddingHorizontal: 20, paddingBottom: 30 },
-  card: { backgroundColor: '#FFF', padding: 15, borderRadius: 10, marginVertical: 6, elevation: 1 },
-  networkName: { fontSize: 16, fontWeight: 'bold', color: '#2D3748' },
-  networkDetails: { fontSize: 12, color: '#718096', marginTop: 2 },
-  emptyText: { color: '#A0AEC0', marginTop: 40, fontSize: 14, textAlign: 'center' }
+  header: {
+    paddingHorizontal: 24,
+    paddingTop: 20,
+    paddingBottom: 10,
+  },
+  headerTitle: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#FFF',
+    letterSpacing: -0.5,
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    color: '#A0AEC0',
+    marginTop: 4,
+  },
+  scanContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 200,
+  },
+  scanCircle: {
+    position: 'absolute',
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: '#3182CE',
+  },
+  scanButton: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#3182CE',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 8,
+    shadowColor: '#3182CE',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+  },
+  scanButtonText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  errorBanner: {
+    backgroundColor: 'rgba(245, 101, 101, 0.1)',
+    marginHorizontal: 20,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F56565',
+    marginBottom: 20,
+  },
+  errorText: {
+    color: '#F56565',
+    textAlign: 'center',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  listContainer: {
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+  },
+  card: {
+    backgroundColor: '#2D3748',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#4A5568',
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  signalDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 10,
+  },
+  ssidText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#FFF',
+    flex: 1,
+  },
+  cardBody: {
+    borderTopWidth: 1,
+    borderTopColor: '#4A5568',
+    paddingTop: 12,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  infoLabel: {
+    fontSize: 12,
+    color: '#718096',
+    fontWeight: '600',
+  },
+  infoValue: {
+    fontSize: 12,
+    color: '#E2E8F0',
+    fontWeight: '400',
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    marginTop: 60,
+    paddingHorizontal: 40,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#FFF',
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: '#718096',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
 });
